@@ -29,8 +29,8 @@ import kotlin.math.sin
  * or after 60 ticks, and is gone a tick later. Ready again 139 ticks on ("Guided Sheep is now available!").
  */
 object Mage {
-    /** Swords: what fires a beam. */
-    private val BEAM_ITEMS = setOf("HYPERION", "WITHER_CLOAK")
+    /** What fires a beam: the swords and the Bonzo Staff. */
+    private val BEAM_ITEMS = setOf("HYPERION", "WITHER_CLOAK", "STARRED_BONZO_STAFF", "BONZO_STAFF")
 
     const val BEAM_RANGE = 40.0
     private const val BEAM_GAP = 4
@@ -43,6 +43,14 @@ object Mage {
     private val clicks = ArrayDeque<Int>()
     private var sheepReady = 0
     private var readyNoted = true
+
+    /** A sheep that can't push you, be pushed or be aimed at. */
+    class GhostSheep(level: net.minecraft.world.level.Level) : Sheep(EntityTypes.SHEEP, level) {
+        override fun isPickable() = false
+        override fun isPushable() = false
+        override fun canBeCollidedWith(other: net.minecraft.world.entity.Entity?) = false
+        override fun pushEntities() {}
+    }
 
     private class Flying(val e: Sheep, val at: Int) { var boomAt = -1 }
     private val sheep = ArrayList<Flying>()
@@ -126,7 +134,7 @@ object Mage {
         if (now < sheepReady) return
         sheepReady = now + SHEEP_COOLDOWN
         readyNoted = false
-        val e = Sheep(EntityTypes.SHEEP, Sim.level)
+        val e = GhostSheep(Sim.level)
         e.setNoAi(true); e.setNoGravity(true); e.isPermanentlyInvulnerable = true; e.isSilent = true
         e.snapTo(p.x, p.y + 0.781, p.z, p.yRot, 0f)
         e.yHeadRot = p.yRot - 10f
@@ -164,6 +172,8 @@ object Mage {
                 Sim.sound(SoundEvents.GENERIC_EXPLODE, 1f, 0.8f + kotlin.random.Random.nextFloat() * 0.18f, at, SoundSource.MASTER)
                 Sim.level.sendParticles(ParticleTypes.EXPLOSION, at.x, at.y + 0.5, at.z, 1, 0.0, 0.0, 0.0, 0.0)
                 if (mob != null) Sim.chat("§7Your Guided Sheep hit §c1 §7enemy for §c0 §7damage.")
+                // Like Explosive Shot: a blast within 2 blocks of a gate blows it.
+                (Fight.phase as? GoldorPhase)?.let { g -> g.gateNear(at, 2.0).takeIf { it > 0 }?.let { g.blowGate(it, Sim.me) } }
             }
         }
     }

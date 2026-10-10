@@ -224,6 +224,24 @@ class SimRestartScreen : Screen(Component.literal("P3 Sim")) {
             toggle("Real Movement", P3Sim.realMoves, 90, P3Sim.realMovesS.description) { P3Sim.toggleRealMoves() },
             change("Reset Role", 70, "Your jobs, the bots you picked and your stacks back to the ${Roles.label(P3Sim.myClass)}'s $skill role.") { P3Plan.resetMine() },
         ))
+
+        // Your best runs: a class's bot can play your fastest P3 as it (S1 starts) instead of its role.
+        val ghosts = P3Plan.botOrder().map { c ->
+            val best = GhostStore.best(skill, c.name)
+            val t = best?.let { "%.2f".format(Locale.ROOT, it.time / 20.0) }
+            toggle(Roles.label(c), P3Plan.ghostOn(c), 56, "On (green): the ${Roles.label(c)} bot plays your fastest $skill P3 as ${Roles.label(c)} (S1 starts) instead of its role. " +
+                (t?.let { "Yours: ${it}s." } ?: "No run of yours yet: it plays its role.")) { P3Plan.toggleGhost(c) }
+        }
+        val times = if (P3Plan.skill != P3Plan.RANDOM) emptyList() else listOf<LayoutElement>(
+            label("§eBot times", 56, "Random skill: each bot job takes between these two."),
+            change("-", 14, "Shorter.") { P3Plan.botMin = (P3Plan.botMin - 0.5).coerceAtLeast(0.0); P3Plan.save() },
+            label("§f${"%.1f".format(Locale.ROOT, P3Plan.botMin)}s", 30),
+            change("+", 14, "Longer.") { P3Plan.botMin = (P3Plan.botMin + 0.5).coerceAtMost(P3Plan.botMax); P3Plan.save() },
+            change("-", 14, "Shorter.") { P3Plan.botMax = (P3Plan.botMax - 0.5).coerceAtLeast(P3Plan.botMin); P3Plan.save() },
+            label("§f${"%.1f".format(Locale.ROOT, P3Plan.botMax)}s", 30),
+            change("+", 14, "Longer.") { P3Plan.botMax = (P3Plan.botMax + 0.5).coerceAtMost(60.0); P3Plan.save() },
+        )
+        row(listOf<LayoutElement>(label("§dYour best", LABEL_W, "A bot plays your fastest run as its class.")) + ghosts + times)
     }
 
     /** Where you stand and look now (a tenth of a block; y to the hundredth, so a slab's height stays). */
@@ -266,6 +284,8 @@ class SimRestartScreen : Screen(Component.literal("P3 Sim")) {
                 toggle("Jitter", P3Sim.jitterS.value, 110, P3Sim.jitterS.description) { P3Sim.jitterS.value = !P3Sim.jitterS.value },
                 toggle("No Melodies", P3Sim.noMelodies, 110, P3Sim.noMelodiesS.description) { P3Sim.noMelodiesS.value = !P3Sim.noMelodies },
                 toggle("Click Limit", P3Sim.clickLimitS.value, 110, P3Sim.clickLimitS.description) { P3Sim.clickLimitS.value = !P3Sim.clickLimitS.value },
+                LuckSlider(110),
+                toggle("1st Click Melody", P3Sim.firstClickMelody, 110, "Always First Click Melody: " + P3Sim.firstClickMelodyS.description) { P3Sim.firstClickMelodyS.value = !P3Sim.firstClickMelody },
             )),
             stack("§eTimings", 106, "The fight's numbers.", listOf(
                 stepper("Goldor kill", "${P3Sim.goldorKill}t", P3Sim.goldorKillS.description, { P3Sim.goldorKillS.value = (P3Sim.goldorKill - 1).coerceAtLeast(10) }, { P3Sim.goldorKillS.value = (P3Sim.goldorKill + 1).coerceAtMost(120) }),
@@ -338,6 +358,17 @@ class SimRestartScreen : Screen(Component.literal("P3 Sim")) {
         override fun applyValue() = setSpeed(speed())
     }
 
+    /** Terminal Luck, 0 to 100% in fives. */
+    private inner class LuckSlider(w: Int) : AbstractSliderButton(0, 0, w, 20, Component.empty(), P3Sim.termLuck) {
+        init {
+            updateMessage()
+            setTooltip(tip(P3Sim.termLuckS.description))
+        }
+        private fun luck() = Math.round(value * 20).toInt() * 5
+        override fun updateMessage() { message = Component.literal("Luck: ${luck()}%") }
+        override fun applyValue() { P3Sim.termLuckS.value = luck(); ModuleManager.saveConfigurations() }
+    }
+
     /** Practice's start timer, 0 to 5 s in tenths. */
     private inner class DelaySlider(w: Int) : AbstractSliderButton(0, 0, w, 20, Component.empty(), Practice.startDelay / 5.0) {
         init {
@@ -380,16 +411,16 @@ class SimRestartScreen : Screen(Component.literal("P3 Sim")) {
 
     // ------------------------------------------------------------------ practice
 
-    /** Practice: your custom one, then the presets. */
+    /** Practice: your custom one on the left (a column, its jobs beside it), the presets on the right. */
     private fun practicePanel() {
         // Custom: your start, the section's jobs you pick, checkpoints in order.
         val start = Practice.customStart
         val cps = Practice.checkpoints.size
-        // The row: the start's section once it's set, else the one you're in now.
+        // The jobs: the start's section once it's set, else the one you're in now.
         val sec = if (start != null) Practice.customSection else mc.player?.let { Practice.sectionAt(it.x, it.y, it.z) } ?: 1
         val picked = Practice.customJobsIn(sec)
-        row(listOf(label("§eCustom", LABEL_W, "Your own practice: a start position (its section is where you stand), that section's jobs you pick and checkpoints to reach in order (within 1 block, the same height), all timed.")))
-        row(listOf(
+        val cols = ArrayList<LayoutElement>()
+        cols += stack("§eCustom", 100, "Your own practice: a start position (its section is where you stand), that section's jobs you pick and checkpoints to reach in order (within 1 block, the same height), all timed.", listOf(
             change(if (start != null) "§aStart Position" else "Start Position", 100,
                 "Click: the custom practice starts where you stand, facing as you are; its section is the one you're in (or the nearest). " +
                     (start?.let { "Now: S${Practice.customSection}, ${at(it)}." } ?: "Not set.")) {
@@ -399,34 +430,35 @@ class SimRestartScreen : Screen(Component.literal("P3 Sim")) {
                 "Click: a checkpoint where you stand (reached within 1 block across, at this exact height; in order). Now: $cps.") {
                 here()?.let { h -> Practice.addCheckpoint(h); EngineerClient.msg("§7Checkpoint §f${Practice.checkpoints.size}§7: ${at(h)}.") }
             },
-            change("§cClear", 40, "Clears the custom practice: start, jobs and checkpoints.") { Practice.clearCustom(); EngineerClient.msg("§7Custom practice cleared.") },
-            DelaySlider(96),
+            change("§cClear", 100, "Clears the custom practice: start, jobs and checkpoints.") { Practice.clearCustom(); EngineerClient.msg("§7Custom practice cleared.") },
+            DelaySlider(100),
+            act(if (start != null) "§aStart Custom" else "§8Start Custom", 100,
+                if (start != null) "Starts the custom practice: S$sec, from your start position, your jobs then the $cps checkpoint(s), timed." else "Set the Start Position first.") { server { Practice.startCustom() } }
+                .also { it.active = start != null },
         ))
-        val cells = arrayOfNulls<String>(COLUMNS.size)
-        for (job in P3Plan.jobsIn(sec)) cells[column(job)] = job
-        row(listOf(label("§6§lS$sec", SEC_W, if (start != null) "The custom practice's section: where its start is." else "The section you're in (the start's, once it's set).")) + cells.map { job ->
-            if (job == null) label("", JOB_W)
-            else {
+        // The section's jobs, in the plan's column order, 6 a column.
+        val jobs = P3Plan.jobsIn(sec).sortedBy { column(it) }
+        jobs.chunked(6).forEachIndexed { i, part ->
+            cols += stack(if (i == 0) "§6§lS$sec" else "", JOB_W, if (start != null) "The custom practice's section: where its start is." else "The section you're in (the start's, once it's set).", part.map { job ->
                 val on = job in picked
                 change((if (on) "§a" else "§8") + COLUMNS[column(job)].first, JOB_W, "${jobName(job)}: ${if (on) "yours to do in the custom practice" else "done at its start"}. Click: ${if (on) "done at the start" else "yours"}.") { Practice.toggleJob(job, sec) }
-            }
-        })
-        row(listOf(act(if (start != null) "§aStart Custom" else "§8Start Custom", 100,
-            if (start != null) "Starts the custom practice: S$sec, from your start position, your jobs then the $cps checkpoint(s), timed." else "Set the Start Position first.") { server { Practice.startCustom() } }
-            .also { it.active = start != null }))
-
-        // Presets, a column for each section that has some.
-        row(listOf(label("§ePresets", LABEL_W, "Set practices: a start, the jobs and checkpoints (the rest of the section done), and their own start timer.")))
-        // A long section takes more than one column (6 a column), its title over the first.
-        row(Practice.presets().groupBy { it.section }.toSortedMap().flatMap { (sec, list) ->
-            list.chunked(6).mapIndexed { i, part ->
-                stack(if (i == 0) "§6S$sec" else "", 64, "Section $sec's presets.", part.map { p ->
-                    act(p.name, 64, "Practice ${p.name} (S$sec): ${p.jobs.joinToString(", ") { jobName(it) }}" +
+            })
+        }
+        cols += label("", 16)
+        // Presets: a column for each section (a long one takes more, 6 a column), its title over the first.
+        Practice.presets().groupBy { it.section }.toSortedMap().forEach { (ps, list) ->
+            list.chunked(6).forEachIndexed { i, part ->
+                cols += stack(if (i == 0) "§eS$ps Presets" else "", 64, "Section $ps's presets: a start, the jobs and checkpoints (the rest of the section done), and their own start timer.", part.map { p ->
+                    act(p.name, 64, "Practice ${p.name} (S$ps): ${p.jobs.joinToString(", ") { jobName(it) }}" +
                         (if (p.checkpoints.isNotEmpty()) ", then ${p.checkpoints.size} checkpoint(s)" else "") +
                         (p.delay?.let { ". Start timer ${"%.1f".format(Locale.ROOT, it)}s." } ?: ". Start timer: the slider's.")) { server { Practice.startPreset(p.name) } }
                 })
             }
-        })
+        }
+        val r = LinearLayout.horizontal().spacing(2)
+        r.defaultCellSetting().alignVerticallyTop()
+        panel.addChild(r)
+        cols.forEach { r.addChild(it) }
     }
 
     // ------------------------------------------------------------------ pieces
@@ -495,7 +527,7 @@ class SimRestartScreen : Screen(Component.literal("P3 Sim")) {
     private companion object {
         const val RESTART_W = 100
         /** The plan's and Advanced's height (5 rows) plus a gap: where the Advanced button goes. */
-        const val PANEL_H = 5 * 20 + 4 * 2 + 4
+        const val PANEL_H = 6 * 20 + 5 * 2 + 4
         const val GAP = 10
         const val ROW = 22
         const val SIDE_W = 90
